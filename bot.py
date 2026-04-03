@@ -13,17 +13,24 @@ MAPS_API = os.environ.get("MAPS_API")
 SAVED_FILE = "saved.json"
 
 CATEGORIES = {
-    "💈 Kirpyklos": "kirpykla",
-    "🔧 Automechanikai": "autoservisas",
-    "🍕 Restoranai": "restoranas",
-    "☕ Kavinės": "kavinė",
-    "🚿 Santechnikai": "santechnikas",
-    "💅 Grožio salonai": "grožio salonas",
-    "💪 Sporto klubai": "sporto klubas",
-    "🏥 Odontologai": "odontologas",
-    "🐾 Veterinarai": "veterinarija",
-    "🧹 Valymo paslaugos": "valymo paslaugos",
+    "💈 Kirpyklos": "hair salon",
+    "🔧 Automechanikai": "auto repair",
+    "🍕 Restoranai": "restaurant",
+    "☕ Kavinės": "cafe",
+    "🚿 Santechnikai": "plumber",
+    "💅 Grožio salonai": "beauty salon",
+    "💪 Sporto klubai": "gym",
+    "🏥 Odontologai": "dentist",
+    "🐾 Veterinarai": "veterinary",
+    "🧹 Valymo paslaugos": "cleaning service",
 }
+
+CITIES = [
+    "Vilnius", "Kaunas", "Klaipėda", "Šiauliai", "Panevėžys",
+    "Alytus", "Marijampolė", "Mažeikiai", "Jonava", "Utena",
+    "Kėdainiai", "Telšiai", "Ukmergė", "Visaginas", "Plungė",
+    "Kretinga", "Radviliškis", "Druskininkai", "Palanga", "Elektrėnai"
+]
 
 def load_saved():
     try:
@@ -41,57 +48,61 @@ def save_business(place_id):
 
 def search_businesses(keyword):
     saved = load_saved()
-    url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
-    params = {
-        "query": f"{keyword} Lietuva",
-        "key": MAPS_API,
-        "language": "lt",
-        "region": "lt"
-    }
-    try:
-        response = requests.get(url, params=params, timeout=10)
-        data = response.json()
-        logger.info(f"Maps status: {data.get('status')} results: {len(data.get('results', []))}")
-    except Exception as e:
-        logger.error(f"Maps API error: {e}")
-        return []
-
     results = []
-    for place in data.get("results", []):
-        place_id = place.get("place_id")
-        if place_id in saved:
-            continue
-        if place.get("website"):
-            continue
 
-        detail_url = "https://maps.googleapis.com/maps/api/place/details/json"
-        detail_params = {
-            "place_id": place_id,
-            "fields": "name,formatted_phone_number,formatted_address,website",
-            "key": MAPS_API
-        }
-        try:
-            detail_resp = requests.get(detail_url, params=detail_params, timeout=10)
-            detail = detail_resp.json().get("result", {})
-        except:
-            continue
-
-        if detail.get("website"):
-            continue
-
-        phone = detail.get("formatted_phone_number", "")
-        if not phone:
-            continue
-
-        results.append({
-            "place_id": place_id,
-            "name": place.get("name", ""),
-            "phone": phone,
-            "address": detail.get("formatted_address", ""),
-        })
-
+    for city in CITIES:
         if len(results) >= 10:
             break
+
+        url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
+        params = {
+            "query": f"{keyword} {city} Lithuania",
+            "key": MAPS_API,
+            "language": "lt",
+            "region": "lt"
+        }
+        try:
+            response = requests.get(url, params=params, timeout=10)
+            data = response.json()
+        except Exception as e:
+            logger.error(f"Maps API error: {e}")
+            continue
+
+        for place in data.get("results", []):
+            if len(results) >= 10:
+                break
+
+            place_id = place.get("place_id")
+            if place_id in saved:
+                continue
+            if place.get("website"):
+                continue
+
+            detail_url = "https://maps.googleapis.com/maps/api/place/details/json"
+            detail_params = {
+                "place_id": place_id,
+                "fields": "name,formatted_phone_number,formatted_address,website",
+                "key": MAPS_API
+            }
+            try:
+                detail_resp = requests.get(detail_url, params=detail_params, timeout=10)
+                detail = detail_resp.json().get("result", {})
+            except:
+                continue
+
+            if detail.get("website"):
+                continue
+
+            phone = detail.get("formatted_phone_number", "")
+            if not phone:
+                continue
+
+            results.append({
+                "place_id": place_id,
+                "name": place.get("name", ""),
+                "phone": phone,
+                "address": detail.get("formatted_address", ""),
+            })
 
     return results
 
@@ -112,10 +123,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cat = data[4:]
         keyword = CATEGORIES.get(cat, cat)
         context.user_data["cat"] = cat
-        context.user_data["keyword"] = keyword
 
         await query.edit_message_text(
-            f"🔍 Ieškau *{cat}* visoje Lietuvoje...\n⏳ Palaukite kelias sekundes!",
+            f"🔍 Ieškau *{cat}* visoje Lietuvoje...\n⏳ Palaukite ~30 sekundžių!",
             parse_mode="Markdown"
         )
 
@@ -123,10 +133,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["businesses"] = businesses
 
         if not businesses:
-            keyboard = [
-                [InlineKeyboardButton("🔄 Bandyti dar kartą", callback_data=f"cat|{cat}")],
-                [InlineKeyboardButton("🏠 Pradžia", callback_data="back")]
-            ]
+            keyboard = [[InlineKeyboardButton("🏠 Pradžia", callback_data="back")]]
             await query.edit_message_text(
                 f"😕 Nerasta verslų be svetainės kategorijoje *{cat}*.\n\nBandyk kitą kategoriją!",
                 reply_markup=InlineKeyboardMarkup(keyboard),
@@ -142,17 +149,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if idx >= len(businesses):
             return
         b = businesses[idx]
-        name = b["name"]
         phone = b["phone"]
-        sms = f"Sveiki! Pastebėjau kad {name} neturi interneto svetainės. Kuriu profesionalias svetaines už 50€ – tai padeda pritraukti daugiau klientų. Ar būtų įdomu? 🌐"
+        name = b["name"]
+        sms = f"Sveiki! Pastebėjau kad {name} neturi interneto svetainės. Kuriu profesionalias svetaines už 50€ – tai padeda pritraukti daugiau klientų internete. Ar būtų įdomu? 🌐"
 
         keyboard = [
             [InlineKeyboardButton("✅ Išsaugoti kaip susisiekta", callback_data=f"save|{idx}")],
-            [InlineKeyboardButton("⏭ Kitas", callback_data=f"next|{idx}")],
+            [InlineKeyboardButton("⏭ Kitas verslas", callback_data=f"next|{idx}")],
             [InlineKeyboardButton("🏠 Pradžia", callback_data="back")]
         ]
         await query.edit_message_text(
-            f"🏪 *{b['name']}*\n📞 `{b['phone']}`\n📍 {b['address']}\n\n✉️ *SMS tekstas (nukopijuok):*\n\n{sms}",
+            f"🏪 *{name}*\n📞 `{phone}`\n📍 {b['address']}\n\n✉️ *SMS tekstas:*\n\n{sms}",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="Markdown"
         )
