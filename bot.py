@@ -25,8 +25,6 @@ CATEGORIES = {
     "🧹 Valymo paslaugos": "valymo paslaugos",
 }
 
-CITIES = ["Vilnius", "Kaunas", "Klaipėda", "Šiauliai", "Panevėžys", "Alytus", "Marijampolė", "Mažeikiai", "Jonava", "Utena"]
-
 def load_saved():
     try:
         with open(SAVED_FILE, "r") as f:
@@ -41,11 +39,11 @@ def save_business(place_id):
         with open(SAVED_FILE, "w") as f:
             json.dump(saved, f)
 
-def search_businesses(keyword, city):
+def search_businesses(keyword):
     saved = load_saved()
     url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
     params = {
-        "query": f"{keyword} {city} Lietuva",
+        "query": f"{keyword} Lietuva",
         "key": MAPS_API,
         "language": "lt",
         "region": "lt"
@@ -53,6 +51,7 @@ def search_businesses(keyword, city):
     try:
         response = requests.get(url, params=params, timeout=10)
         data = response.json()
+        logger.info(f"Maps status: {data.get('status')} results: {len(data.get('results', []))}")
     except Exception as e:
         logger.error(f"Maps API error: {e}")
         return []
@@ -99,7 +98,7 @@ def search_businesses(keyword, city):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton(cat, callback_data=f"cat|{cat}")] for cat in CATEGORIES]
     await update.message.reply_text(
-        "🤖 *WebsiteFinder Botas*\n\nRandu verslas be svetainės visoje Lietuvoje ir paruošiu SMS tekstą!\n\n📂 Pasirink kategoriją:",
+        "🤖 *WebsiteFinder Botas*\n\nRandu verslas be svetainės visoje Lietuvoje!\n\n📂 Pasirink kategoriją:",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown"
     )
@@ -115,41 +114,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["cat"] = cat
         context.user_data["keyword"] = keyword
 
-        keyboard = []
-        row = []
-        for i, city in enumerate(CITIES):
-            row.append(InlineKeyboardButton(city, callback_data=f"city|{city}"))
-            if len(row) == 2:
-                keyboard.append(row)
-                row = []
-        if row:
-            keyboard.append(row)
-        keyboard.append([InlineKeyboardButton("🔙 Atgal", callback_data="back")])
-
         await query.edit_message_text(
-            f"✅ Kategorija: *{cat}*\n\n🏙 Pasirink miestą:",
-            reply_markup=InlineKeyboardMarkup(keyboard),
+            f"🔍 Ieškau *{cat}* visoje Lietuvoje...\n⏳ Palaukite kelias sekundes!",
             parse_mode="Markdown"
         )
 
-    elif data.startswith("city|"):
-        city = data[5:]
-        keyword = context.user_data.get("keyword", "verslas")
-        cat = context.user_data.get("cat", "")
-
-        await query.edit_message_text(f"🔍 Ieškau *{cat}* mieste *{city}*...\n⏳ Palaukite kelias sekundes!", parse_mode="Markdown")
-
-        businesses = search_businesses(keyword, city)
+        businesses = search_businesses(keyword)
         context.user_data["businesses"] = businesses
-        context.user_data["city"] = city
 
         if not businesses:
             keyboard = [
-                [InlineKeyboardButton("🔄 Bandyti kitą miestą", callback_data=f"cat|{cat}")],
+                [InlineKeyboardButton("🔄 Bandyti dar kartą", callback_data=f"cat|{cat}")],
                 [InlineKeyboardButton("🏠 Pradžia", callback_data="back")]
             ]
             await query.edit_message_text(
-                f"😕 {city} nerasta verslų be svetainės kategorijoje *{cat}*.\n\nBandyk kitą miestą arba kategoriją!",
+                f"😕 Nerasta verslų be svetainės kategorijoje *{cat}*.\n\nBandyk kitą kategoriją!",
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode="Markdown"
             )
@@ -173,7 +152,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🏠 Pradžia", callback_data="back")]
         ]
         await query.edit_message_text(
-            f"📱 *{name}*\n📞 `{phone}`\n📍 {b['address']}\n\n✉️ *SMS tekstas (nukopijuok):*\n\n{sms}",
+            f"🏪 *{b['name']}*\n📞 `{b['phone']}`\n📍 {b['address']}\n\n✉️ *SMS tekstas (nukopijuok):*\n\n{sms}",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="Markdown"
         )
@@ -183,7 +162,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         businesses = context.user_data.get("businesses", [])
         if idx < len(businesses):
             save_business(businesses[idx]["place_id"])
-        await query.answer("✅ Išsaugota! Šis verslas bus praleistas ateityje.", show_alert=True)
+        await query.answer("✅ Išsaugota!", show_alert=True)
         await show_business(query, context, idx + 1)
 
     elif data.startswith("next|"):
