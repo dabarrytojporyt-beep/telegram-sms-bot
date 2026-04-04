@@ -1,115 +1,146 @@
-import os
-import json
 import logging
-import requests
+import json
+import os
+import urllib.parse
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import (
+    Application, CommandHandler, CallbackQueryHandler,
+    ContextTypes, ConversationHandler, MessageHandler, filters
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-TOKEN = os.environ.get("TOKEN")
-MAPS_API = os.environ.get("MAPS_API")
+# ⚠️ ĮRAŠYK SAVO TOKEN ČIA:
+TOKEN = "ĮRAŠYK_TOKEN_ČIA"
+
 SAVED_FILE = "saved.json"
 
-CATEGORIES = {
-    "💈 Kirpyklos": "hair salon",
-    "🔧 Automechanikai": "auto repair",
-    "🍕 Restoranai": "restaurant",
-    "☕ Kavinės": "cafe",
-    "🚿 Santechnikai": "plumber",
-    "💅 Grožio salonai": "beauty salon",
-    "💪 Sporto klubai": "gym",
-    "🏥 Odontologai": "dentist",
-    "🐾 Veterinarai": "veterinary",
-    "🧹 Valymo paslaugos": "cleaning service",
-}
-
-CITIES = [
-    "Vilnius", "Kaunas", "Klaipėda", "Šiauliai", "Panevėžys",
-    "Alytus", "Marijampolė", "Mažeikiai", "Jonava", "Utena",
-    "Kėdainiai", "Telšiai", "Ukmergė", "Visaginas", "Plungė",
-    "Kretinga", "Radviliškis", "Druskininkai", "Palanga", "Elektrėnai"
-]
+# Conversation states
+LAUKIA_INFO = 1
 
 def load_saved():
-    try:
-        with open(SAVED_FILE, "r") as f:
+    if os.path.exists(SAVED_FILE):
+        with open(SAVED_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except:
-        return []
+    return {}
 
-def save_business(place_id):
+def save_verslas(phone, data):
     saved = load_saved()
-    if place_id not in saved:
-        saved.append(place_id)
-        with open(SAVED_FILE, "w") as f:
-            json.dump(saved, f)
+    saved[phone] = data
+    with open(SAVED_FILE, "w", encoding="utf-8") as f:
+        json.dump(saved, f, ensure_ascii=False, indent=2)
 
-def search_businesses(keyword):
-    saved = load_saved()
-    results = []
+def is_saved(phone):
+    return phone in load_saved()
 
-    for city in CITIES:
-        if len(results) >= 10:
+def parse_verslas(text):
+    """Išskaito verslo info iš laisvai įvesto teksto"""
+    lines = [l.strip() for l in text.strip().split('\n') if l.strip()]
+    
+    data = {
+        "pavadinimas": "",
+        "tipas": "",
+        "adresas": "",
+        "telefonas": "",
+        "ivertinimas": "",
+        "atsiliepimų_sk": "",
+        "papildoma": ""
+    }
+    
+    full_text = text.lower()
+    
+    # Ieško telefono numerio
+    import re
+    phone_match = re.search(r'[\+\d][\d\s\-\(\)]{7,}', text)
+    if phone_match:
+        data["telefonas"] = phone_match.group().strip()
+    
+    # Ieško įvertinimo
+    rating_match = re.search(r'(\d[\.,]\d)\s*[\(\[]?(\d+)?', text)
+    if rating_match:
+        data["ivertinimas"] = rating_match.group(1).replace(',', '.')
+        if rating_match.group(2):
+            data["atsiliepimų_sk"] = rating_match.group(2)
+    
+    # Pirmoji eilutė = pavadinimas
+    if lines:
+        data["pavadinimas"] = lines[0]
+    
+    # Ieško adreso (g., pr., al.)
+    addr_match = re.search(r'[A-ZĄČĘĖĮŠŲŪŽ][^\n]*(?:g\.|pr\.|al\.|gatvė)[^\n]*', text)
+    if addr_match:
+        data["adresas"] = addr_match.group().strip()
+    
+    # Tipas iš teksto
+    tipai = {
+        "kirpykl": "kirpykla", "salon": "grožio salonas", "gražio": "grožio salonas",
+        "grožio": "grožio salonas", "mechani": "automechanika", "autoservis": "autoservisas",
+        "restoran": "restoranas", "kavin": "kavinė", "valymo": "valymo paslaugos",
+        "statybos": "statybos", "santechni": "santechnika", "elektri": "elektros darbai",
+        "beauty": "grožio salonas", "hair": "plaukų salonas"
+    }
+    for key, val in tipai.items():
+        if key in full_text:
+            data["tipas"] = val
             break
+    
+    # Papildoma info - atsiliepimai
+    reviews = re.findall(r'"([^"]{20,})"', text)
+    if reviews:
+        data["papildoma"] = reviews[0][:150]
+    
+    return data
 
-        url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
-        params = {
-            "query": f"{keyword} {city} Lithuania",
-            "key": MAPS_API,
-            "language": "lt",
-            "region": "lt"
-        }
-        try:
-            response = requests.get(url, params=params, timeout=10)
-            data = response.json()
-        except Exception as e:
-            logger.error(f"Maps API error: {e}")
-            continue
+def sukurti_sms(data):
+    pav = data.get("pavadinimas", "Jūsų verslas")
+    tipas = data.get("tipas", "verslas")
+    ivert = data.get("ivertinimas", "")
+    ats_sk = data.get("atsiliepimų_sk", "")
+    
+    rating_text = ""
+    if ivert:
+        rating_text = f" ({ivert}⭐"
+        if ats_sk:
+            rating_text += f", {ats_sk} atsiliepimai"
+        rating_text += ")"
+    
+    sms = (
+        f"Sveiki! Esu web dizaineris iš Klaipėdos. "
+        f"Pastebėjau, kad {pav}{rating_text} neturi svetainės. "
+        f"Galiu sukurti modernią, profesionalią svetainę už 50€. "
+        f"Tai padėtų rasti daugiau klientų internete. Ar domintų?"
+    )
+    return sms
 
-        for place in data.get("results", []):
-            if len(results) >= 10:
-                break
-
-            place_id = place.get("place_id")
-            if place_id in saved:
-                continue
-            if place.get("website"):
-                continue
-
-            detail_url = "https://maps.googleapis.com/maps/api/place/details/json"
-            detail_params = {
-                "place_id": place_id,
-                "fields": "name,formatted_phone_number,formatted_address,website",
-                "key": MAPS_API
-            }
-            try:
-                detail_resp = requests.get(detail_url, params=detail_params, timeout=10)
-                detail = detail_resp.json().get("result", {})
-            except:
-                continue
-
-            if detail.get("website"):
-                continue
-
-            phone = detail.get("formatted_phone_number", "")
-            if not phone:
-                continue
-
-            results.append({
-                "place_id": place_id,
-                "name": place.get("name", ""),
-                "phone": phone,
-                "address": detail.get("formatted_address", ""),
-            })
-
-    return results
+def format_verslas_info(data):
+    txt = f"🏢 *{data.get('pavadinimas', '–')}*\n"
+    if data.get('tipas'):
+        txt += f"📌 {data['tipas']}\n"
+    if data.get('adresas'):
+        txt += f"📍 {data['adresas']}\n"
+    if data.get('telefonas'):
+        txt += f"📞 {data['telefonas']}\n"
+    if data.get('ivertinimas'):
+        txt += f"⭐ {data['ivertinimas']}"
+        if data.get('atsiliepimų_sk'):
+            txt += f" ({data['atsiliepimų_sk']} atsiliepimai)"
+        txt += "\n"
+    return txt
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton(cat, callback_data=f"cat|{cat}")] for cat in CATEGORIES]
+    saved = load_saved()
+    keyboard = [
+        [InlineKeyboardButton("➕ Įvesti naują verslą", callback_data="naujas")],
+        [InlineKeyboardButton(f"📋 Išsaugoti ({len(saved)})", callback_data="saved")],
+    ]
     await update.message.reply_text(
-        "🤖 *WebsiteFinder Botas*\n\nRandu verslas be svetainės visoje Lietuvoje!\n\n📂 Pasirink kategoriją:",
+        "👋 *Website pardavimo botas*\n\n"
+        "Įvesk verslo info iš Google Maps ir aš:\n"
+        "• Suformuosiu SMS tekstą\n"
+        "• Atidarysi SMS telefone\n"
+        "• Tik paspaudžiai Siųsti ✅\n\n"
+        "Spausk žemiau:",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown"
     )
@@ -119,99 +150,162 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
 
-    if data.startswith("cat|"):
-        cat = data[4:]
-        keyword = CATEGORIES.get(cat, cat)
-        context.user_data["cat"] = cat
-
+    if data == "naujas":
         await query.edit_message_text(
-            f"🔍 Ieškau *{cat}* visoje Lietuvoje...\n⏳ Palaukite ~30 sekundžių!",
+            "📋 *Įvesk verslo informaciją*\n\n"
+            "Tiesiog nukopijuok viską iš Google Maps ir įkisk čia:\n"
+            "– Pavadinimas\n"
+            "– Adresas\n"
+            "– Telefonas\n"
+            "– Įvertinimas\n"
+            "– Atsiliepimai\n\n"
+            "Galima įklijuoti viską kaip yra – aš pats išrinksiiu kas reikia! 👇",
             parse_mode="Markdown"
         )
+        return LAUKIA_INFO
 
-        businesses = search_businesses(keyword)
-        context.user_data["businesses"] = businesses
-
-        if not businesses:
-            keyboard = [[InlineKeyboardButton("🏠 Pradžia", callback_data="back")]]
+    elif data == "saved":
+        saved = load_saved()
+        if not saved:
+            keyboard = [[InlineKeyboardButton("🔙 Atgal", callback_data="atgal_start")]]
             await query.edit_message_text(
-                f"😕 Nerasta verslų be svetainės kategorijoje *{cat}*.\n\nBandyk kitą kategoriją!",
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode="Markdown"
+                "📋 Nėra išsaugotų verslų.\n\nIšsaugok verslus kad nesiųstum du kartus!",
+                reply_markup=InlineKeyboardMarkup(keyboard)
             )
             return
 
-        await show_business(query, context, 0)
+        txt = "📋 *Jau kontaktuoti verslai:*\n\n"
+        for phone, b in saved.items():
+            txt += f"✅ *{b.get('pavadinimas','?')}* – `{phone}`\n"
+        
+        keyboard = [[InlineKeyboardButton("🔙 Atgal", callback_data="atgal_start")]]
+        await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
-    elif data.startswith("sms|"):
-        idx = int(data[4:])
-        businesses = context.user_data.get("businesses", [])
-        if idx >= len(businesses):
-            return
-        b = businesses[idx]
-        phone = b["phone"]
-        name = b["name"]
-        sms = f"Sveiki! Pastebėjau kad {name} neturi interneto svetainės. Kuriu profesionalias svetaines už 50€ – tai padeda pritraukti daugiau klientų internete. Ar būtų įdomu? 🌐"
-
+    elif data == "atgal_start":
+        saved = load_saved()
         keyboard = [
-            [InlineKeyboardButton("✅ Išsaugoti kaip susisiekta", callback_data=f"save|{idx}")],
-            [InlineKeyboardButton("⏭ Kitas verslas", callback_data=f"next|{idx}")],
-            [InlineKeyboardButton("🏠 Pradžia", callback_data="back")]
+            [InlineKeyboardButton("➕ Įvesti naują verslą", callback_data="naujas")],
+            [InlineKeyboardButton(f"📋 Išsaugoti ({len(saved)})", callback_data="saved")],
         ]
         await query.edit_message_text(
-            f"🏪 *{name}*\n📞 `{phone}`\n📍 {b['address']}\n\n✉️ *SMS tekstas:*\n\n{sms}",
+            "👋 *Website pardavimo botas*\n\nSpausk žemiau:",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="Markdown"
         )
 
-    elif data.startswith("save|"):
-        idx = int(data[5:])
-        businesses = context.user_data.get("businesses", [])
-        if idx < len(businesses):
-            save_business(businesses[idx]["place_id"])
-        await query.answer("✅ Išsaugota!", show_alert=True)
-        await show_business(query, context, idx + 1)
-
-    elif data.startswith("next|"):
-        idx = int(data[5:])
-        await show_business(query, context, idx + 1)
-
-    elif data == "back":
-        keyboard = [[InlineKeyboardButton(cat, callback_data=f"cat|{cat}")] for cat in CATEGORIES]
+    elif data.startswith("siusti_"):
+        phone_enc = data.replace("siusti_", "")
+        verslas = context.user_data.get("verslas", {})
+        sms_text = context.user_data.get("sms_text", "")
+        phone = verslas.get("telefonas", "")
+        
+        phone_clean = phone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+        if phone_clean.startswith("0"):
+            phone_clean = "+370" + phone_clean[1:]
+        
+        sms_link = f"sms:{phone_clean}?body={urllib.parse.quote(sms_text)}"
+        
+        keyboard = [
+            [InlineKeyboardButton("📱 ATIDARYTI SMS →", url=sms_link)],
+            [InlineKeyboardButton("✅ Išsaugoti (jau siunčiau)", callback_data="issaugoti")],
+            [InlineKeyboardButton("🔙 Pradžia", callback_data="atgal_start")],
+        ]
         await query.edit_message_text(
-            "🤖 *WebsiteFinder Botas*\n\n📂 Pasirink kategoriją:",
+            f"{format_verslas_info(verslas)}\n"
+            f"📝 *SMS tekstas:*\n_{sms_text}_\n\n"
+            f"👇 Spausk mygtuką – atsidaro SMS su tekstu:",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="Markdown"
         )
 
-async def show_business(query, context, idx):
-    businesses = context.user_data.get("businesses", [])
-    if idx >= len(businesses):
-        keyboard = [[InlineKeyboardButton("🏠 Pradžia", callback_data="back")]]
+    elif data == "issaugoti":
+        verslas = context.user_data.get("verslas", {})
+        phone = verslas.get("telefonas", "nežinomas")
+        save_verslas(phone, verslas)
+        
+        saved = load_saved()
+        keyboard = [
+            [InlineKeyboardButton("➕ Kitas verslas", callback_data="naujas")],
+            [InlineKeyboardButton(f"📋 Išsaugoti ({len(saved)})", callback_data="saved")],
+        ]
         await query.edit_message_text(
-            "✅ *Visi verslai peržiūrėti!*\n\nGrįžk į pradžią ir ieškok daugiau.",
+            f"✅ *Išsaugota!*\n\n"
+            f"_{verslas.get('pavadinimas', '')}_ pridėta į sąrašą.\n"
+            f"Daugiau šiam verslui SMS nesiųsi.",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="Markdown"
         )
-        return
 
-    b = businesses[idx]
+    elif data == "redaguoti_sms":
+        await query.edit_message_text(
+            "✏️ Įvesk naują SMS tekstą:\n\n"
+            "(Arba /cancel kad atšauktum)",
+            parse_mode="Markdown"
+        )
+        return LAUKIA_INFO
+
+async def gauti_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    
+    await update.message.reply_text("🔍 Analizuoju verslo informaciją...")
+    
+    verslas = parse_verslas(text)
+    sms_text = sukurti_sms(verslas)
+    
+    context.user_data["verslas"] = verslas
+    context.user_data["sms_text"] = sms_text
+    
+    phone = verslas.get("telefonas", "")
+    already_saved = is_saved(phone) if phone else False
+    
+    warning = ""
+    if already_saved:
+        warning = "⚠️ *Šiam verslui jau siuntei SMS anksčiau!*\n\n"
+    if not phone:
+        warning += "⚠️ *Nerasta telefono numerio – pridėk rankiniu būdu*\n\n"
+    
+    phone_clean = phone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+    if phone_clean.startswith("0"):
+        phone_clean = "+370" + phone_clean[1:]
+    
+    sms_link = f"sms:{phone_clean}?body={urllib.parse.quote(sms_text)}" if phone_clean else "#"
+    
     keyboard = [
-        [InlineKeyboardButton("📱 Gauti SMS tekstą", callback_data=f"sms|{idx}")],
-        [InlineKeyboardButton("⏭ Praleisti", callback_data=f"next|{idx}")],
-        [InlineKeyboardButton("🏠 Pradžia", callback_data="back")]
+        [InlineKeyboardButton("📱 ATIDARYTI SMS →", url=sms_link)],
+        [InlineKeyboardButton("✅ Išsaugoti (jau siunčiau)", callback_data="issaugoti")],
+        [InlineKeyboardButton("➕ Kitas verslas", callback_data="naujas")],
+        [InlineKeyboardButton("🔙 Pradžia", callback_data="atgal_start")],
     ]
-    await query.edit_message_text(
-        f"🏪 *{b['name']}*\n📞 `{b['phone']}`\n📍 {b['address']}\n\n_{idx+1} iš {len(businesses)} verslų_",
+    
+    await update.message.reply_text(
+        f"{warning}"
+        f"{format_verslas_info(verslas)}\n"
+        f"📝 *SMS tekstas:*\n_{sms_text}_\n\n"
+        f"👇 Spausk – atsidaro SMS su tekstu telefone:",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown"
     )
+    return ConversationHandler.END
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Atšaukta. /start pradėti iš naujo.")
+    return ConversationHandler.END
 
 def main():
     app = Application.builder().token(TOKEN).build()
+    
+    conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(button_handler, pattern="^naujas$")],
+        states={LAUKIA_INFO: [MessageHandler(filters.TEXT & ~filters.COMMAND, gauti_info)]},
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+    
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(conv)
     app.add_handler(CallbackQueryHandler(button_handler))
-    app.run_polling(drop_pending_updates=True)
+    
+    print("✅ Botas paleistas! Spausk /start Telegram.")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
