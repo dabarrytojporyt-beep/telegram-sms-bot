@@ -12,7 +12,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ⚠️ ĮRAŠYK SAVO TOKEN ČIA:
-TOKEN = "ĮRAŠYK_TOKEN_ČIA"
+TOKEN = os.environ.get("TOKEN")
 
 SAVED_FILE = "saved.json"
 
