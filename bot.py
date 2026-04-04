@@ -11,7 +11,7 @@ from telegram.ext import (
 
 logging.basicConfig(level=logging.INFO)
 
-TOKEN = os.environ.get("TOKEN", "8621933204:AAFQrATLCQq_att69edxyyy31_EpaE0A0Lk")
+TOKEN = os.environ.get("TOKEN")
 SAVED_FILE = "saved.json"
 LAUKIA_INFO = 1
 
@@ -34,25 +34,21 @@ def parse_verslas(text):
     data = {"pavadinimas": "", "telefonas": "", "ivertinimas": "", "atsiliepimų_sk": "", "adresas": ""}
     lines = [l.strip() for l in text.strip().split('\n') if l.strip()]
 
-    # Telefonas
-    phone_match = re.search(r'[\+\(]?[\d][\d\s\-\(\)]{6,}', text)
+    phone_match = re.search(r'[\(]?0[\-\s]?\d{3}[\s\-]?\d{5}', text)
     if phone_match:
         data["telefonas"] = phone_match.group().strip()
 
-    # Įvertinimas
     rating_match = re.search(r'(\d[\.,]\d)\s*\(?(\d+)?\)?', text)
     if rating_match:
         data["ivertinimas"] = rating_match.group(1).replace(',', '.')
         if rating_match.group(2):
             data["atsiliepimų_sk"] = rating_match.group(2)
 
-    # Pavadinimas - pirmoji eilutė kuri nėra skaičius ar trumpa
     for line in lines:
-        if len(line) > 4 and not re.match(r'^[\d\.\(\)]+$', line):
+        if len(line) > 4 and not re.match(r'^[\d\.\(\)\+\-\s]+$', line) and not re.match(r'^(Overview|Reviews|About|Directions|Save|Nearby|Share|Book)', line):
             data["pavadinimas"] = line
             break
 
-    # Adresas
     addr = re.search(r'[A-ZĄČĘĖĮŠŲŪŽ][^\n]*(?:g\.|pr\.|al\.|gatvė)[^\n]*', text)
     if addr:
         data["adresas"] = addr.group().strip()
@@ -70,9 +66,9 @@ def sukurti_sms(data):
             rating_text += f", {ats_sk} atsiliepimai"
         rating_text += ")"
     return (
-        f"Sveiki! Esu web dizaineris iš Klaipėdos. "
-        f"Pastebėjau, kad {pav}{rating_text} neturi svetainės. "
-        f"Galiu sukurti modernią svetainę už 50€ – tai padėtų rasti daugiau klientų. Ar domintų?"
+        f"Sveiki! Esu web dizaineris is Klaipedos. "
+        f"Pastebejau, kad {pav}{rating_text} neturi svetaines. "
+        f"Galiu sukurti moderni svetaine uz 50EUR - tai padetu rasti daugiau klientu. Ar domintu?"
     )
 
 def format_info(data):
@@ -89,26 +85,27 @@ def format_info(data):
     return txt
 
 def gauti_sms_link(phone, sms_text):
-    p = phone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "").replace("0-", "")
-    if p.startswith("0"):
-        p = "+370" + p[1:]
-    if not p.startswith("+"):
-        p = "+370" + p
+    p = re.sub(r'[\s\-\(\)]', '', phone)
+    p = p.replace('0-', '')
+    if p.startswith('0'):
+        p = '+370' + p[1:]
+    if not p.startswith('+'):
+        p = '+370' + p
     return f"sms:{p}?body={urllib.parse.quote(sms_text)}"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     saved = load_saved()
     kb = [
-        [InlineKeyboardButton("➕ Įvesti naują verslą", callback_data="naujas")],
-        [InlineKeyboardButton(f"📋 Jau siųsti ({len(saved)})", callback_data="saved")],
+        [InlineKeyboardButton("➕ Ivesti nauja versla", callback_data="naujas")],
+        [InlineKeyboardButton(f"📋 Jau siusti ({len(saved)})", callback_data="saved")],
     ]
     await update.message.reply_text(
         "👋 *SMS pardavimo botas*\n\n"
         "Kaip veikia:\n"
-        "1️⃣ Spaudžiai *Įvesti naują verslą*\n"
-        "2️⃣ Nukopijuoji info iš Google Maps ir įkeli\n"
-        "3️⃣ Spaudžiai *📱 ATIDARYTI SMS*\n"
-        "4️⃣ Telefone tik spaudžiai *Siųsti* ✅",
+        "1. Spaudzi *Ivesti nauja versla*\n"
+        "2. Nukopijuoji info is Google Maps ir ikeli\n"
+        "3. Spaudzi *ATIDARYTI SMS*\n"
+        "4. Telefone tik spaudzi *Siusti*",
         reply_markup=InlineKeyboardMarkup(kb),
         parse_mode="Markdown"
     )
@@ -120,9 +117,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "naujas":
         await query.edit_message_text(
-            "📋 *Įvesk verslo informaciją*\n\n"
-            "Nukopijuok viską iš Google Maps ir įkisk čia.\n"
-            "Aš pats išrinksiu kas reikia! 👇",
+            "📋 *Iveski verslo informacija*\n\n"
+            "Nukopijuok viska is Google Maps ir ikisk cia.\n"
+            "As pats isrinksiu kas reikia! 👇",
             parse_mode="Markdown"
         )
         return LAUKIA_INFO
@@ -131,9 +128,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         saved = load_saved()
         if not saved:
             kb = [[InlineKeyboardButton("🔙 Atgal", callback_data="atgal")]]
-            await query.edit_message_text("📋 Nėra išsaugotų verslų.", reply_markup=InlineKeyboardMarkup(kb))
+            await query.edit_message_text("📋 Nera issaugotu verslu.", reply_markup=InlineKeyboardMarkup(kb))
             return
-        txt = "📋 *Jau siųsti verslai:*\n\n"
+        txt = "📋 *Jau siusti verslai:*\n\n"
         for phone, b in saved.items():
             txt += f"✅ *{b.get('pavadinimas','?')}* – `{phone}`\n"
         kb = [[InlineKeyboardButton("🔙 Atgal", callback_data="atgal")]]
@@ -142,11 +139,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "atgal":
         saved = load_saved()
         kb = [
-            [InlineKeyboardButton("➕ Įvesti naują verslą", callback_data="naujas")],
-            [InlineKeyboardButton(f"📋 Jau siųsti ({len(saved)})", callback_data="saved")],
+            [InlineKeyboardButton("➕ Ivesti nauja versla", callback_data="naujas")],
+            [InlineKeyboardButton(f"📋 Jau siusti ({len(saved)})", callback_data="saved")],
         ]
         await query.edit_message_text(
-            "👋 *SMS pardavimo botas*\n\nSpausk žemiau:",
+            "👋 *SMS pardavimo botas*\n\nSpausk zemiau:",
             reply_markup=InlineKeyboardMarkup(kb),
             parse_mode="Markdown"
         )
@@ -158,10 +155,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         saved = load_saved()
         kb = [
             [InlineKeyboardButton("➕ Kitas verslas", callback_data="naujas")],
-            [InlineKeyboardButton(f"📋 Jau siųsti ({len(saved)})", callback_data="saved")],
+            [InlineKeyboardButton(f"📋 Jau siusti ({len(saved)})", callback_data="saved")],
         ]
         await query.edit_message_text(
-            f"✅ *Išsaugota!*\n_{verslas.get('pavadinimas','')}_ pridėta į sąrašą.\n\nKitą verslą?",
+            f"✅ *Issaugota!*\n_{verslas.get('pavadinimas','')}_ prideta i sarasa.\n\nKita versla?",
             reply_markup=InlineKeyboardMarkup(kb),
             parse_mode="Markdown"
         )
@@ -174,14 +171,14 @@ async def gauti_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["sms_text"] = sms_text
 
     phone = verslas.get("telefonas", "")
-    saved_warning = "⚠️ *Šiam numeriui jau siuntei!*\n\n" if phone and is_saved(phone) else ""
-    no_phone = "⚠️ *Nerasta telefono – įvesk rankiniu būdu*\n\n" if not phone else ""
+    saved_warning = "DĖMESIO: Šiam numeriui jau siuntei!\n\n" if phone and is_saved(phone) else ""
+    no_phone = "DĖMESIO: Nerasta telefono - iveski ranka\n\n" if not phone else ""
 
     sms_link = gauti_sms_link(phone, sms_text) if phone else "sms:"
 
     kb = [
-        [InlineKeyboardButton("📱 ATIDARYTI SMS →", url=sms_link)],
-        [InlineKeyboardButton("✅ Išsaugoti (išsiunčiau)", callback_data="issaugoti")],
+        [InlineKeyboardButton("📱 ATIDARYTI SMS", url=sms_link)],
+        [InlineKeyboardButton("✅ Issaugoti (issiunčiau)", callback_data="issaugoti")],
         [InlineKeyboardButton("➕ Kitas verslas", callback_data="naujas")],
     ]
 
@@ -196,7 +193,7 @@ async def gauti_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Atšaukta. /start pradėti iš naujo.")
+    await update.message.reply_text("Atsaukta. /start pradeti is naujo.")
     return ConversationHandler.END
 
 def main():
@@ -209,7 +206,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(conv)
     app.add_handler(CallbackQueryHandler(button_handler))
-    print("✅ Botas paleistas!")
+    print("Botas paleistas!")
     app.run_polling()
 
 if __name__ == "__main__":
